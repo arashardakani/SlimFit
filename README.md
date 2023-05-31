@@ -5,7 +5,7 @@
 
 
 ## This folder contains the preliminary version of our code. To run the code, simply execute the following command by replacing "task.py" with your desired task:
-CUDA_VISIBLE_DEVICES=1, python -W ignore task.py
+CUDA_VISIBLE_DEVICES=0 python -W ignore task.py
 
 ## Example:
-CUDA_VISIBLE_DEVICES=1, python -W ignore CIFAR10.py
+CUDA_VISIBLE_DEVICES=0 python -W ignore CIFAR10.py
