@@ -11,7 +11,6 @@ import numpy as np
 from torch.utils.data import DataLoader
 from transformers import PretrainedConfig, default_data_collator, DataCollatorWithPadding
 from ILSBERT import *
-#from Obert import *
 from torch.optim.lr_scheduler import LambdaLR
 import matplotlib.pyplot as plt
 import random
@@ -199,7 +198,7 @@ class ParameterDiffer(object):
 diff = ParameterDiffer(model)
 
 num_train_optimization_steps = len(train_loader) * num_train_epochs
-lr = 2e-4 #7.5
+lr = 1.25e-4 #1.75e-4
 print("LR:", lr, "Seed:", seed)
 
 no_decay = ["bias", "LayerNorm.weightd"]
@@ -231,7 +230,7 @@ print(t)
 
 diff_his = []
 diff_vec = torch.rand(t) * 10000000000 #1e-8
-pitch = int(0.91 * t)
+pitch = int(0.9 * t)
 print("pitch:",pitch)
 metric = load_metric('glue', task)
 for epoch in range(num_train_epochs):

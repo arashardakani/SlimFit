@@ -11,14 +11,13 @@ import numpy as np
 from torch.utils.data import DataLoader
 from transformers import PretrainedConfig, default_data_collator, DataCollatorWithPadding
 from ILSBERT import *
-#from Obert import *
 from torch.optim.lr_scheduler import LambdaLR
 import matplotlib.pyplot as plt
 import random
 import re
 from AdamW import *
 
-seed = 43
+seed = 44
 PYTORCH_NO_CUDA_MEMORY_CACHING=1
 class WarmupLinearSchedule(LambdaLR):
     """ Linear warmup and then linear decay.
@@ -195,7 +194,7 @@ class ParameterDiffer(object):
 diff = ParameterDiffer(model)
 
 num_train_optimization_steps = len(train_loader) * num_train_epochs
-lr = 6e-5 #7.5
+lr = 8e-5 #7.5
 print("LR:", lr, "Seed:", seed)
 
 no_decay = ["bias", "LayerNorm.weightd"]

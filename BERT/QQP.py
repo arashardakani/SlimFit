@@ -11,7 +11,6 @@ import numpy as np
 from torch.utils.data import DataLoader
 from transformers import PretrainedConfig, default_data_collator, DataCollatorWithPadding
 from ILSBERT import *
-#from Obert import *
 from torch.optim.lr_scheduler import LambdaLR
 import matplotlib.pyplot as plt
 import random
@@ -196,7 +195,7 @@ class ParameterDiffer(object):
 diff = ParameterDiffer(model)
 
 num_train_optimization_steps = len(train_loader) * num_train_epochs
-lr = 6e-5 #7.5
+lr = 5e-5 #7.5
 print("LR:", lr, "Seed:", seed)
 
 no_decay = ["bias", "LayerNorm.weight"]
@@ -253,10 +252,9 @@ for epoch in range(num_train_epochs):
 
         outputs = model(**batch)
         
-        loss = outputs.loss#[0]#.sum()
+        loss = outputs.loss
 
         optim.zero_grad()
-
         loss.backward()
         optim.step()
         a = diff.get_difference(model)

@@ -193,7 +193,7 @@ class ParameterDiffer(object):
 diff = ParameterDiffer(model)
 
 num_train_optimization_steps = len(train_loader) * num_train_epochs
-lr = 10e-5 
+lr = 8e-5 # 16e-5 
 print("LR:", lr, "Seed:", seed)
 
 no_decay = ["bias", "LayerNorm.weight"]
@@ -257,7 +257,7 @@ for epoch in range(num_train_epochs):
         optim.step()
         a = diff.get_difference(model)
         diff_vec[sorted_diff[pitch:]] = a[sorted_diff[pitch:]]
-        scheduler.step()      
+        lr_scheduler.step()      
             
         if i % 2000 ==1999:
             with torch.no_grad():
