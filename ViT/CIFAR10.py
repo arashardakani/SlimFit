@@ -26,6 +26,9 @@ seed = 43
 random.seed(seed)
 np.random.seed(seed)
 torch.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
+torch.backends.cudnn.benchmark = False
+torch.backends.cudnn.deterministic = True
 
 set_seed(seed)
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -122,7 +125,6 @@ model = ViTForImageClassification.from_pretrained('google/vit-base-patch16-224-i
 model.to(device)
 model.train()
 
-model.classifier.weight.data.normal_(mean=0.0, std=model.config.initializer_range)
 
 
 
@@ -158,7 +160,7 @@ class ParameterDiffer(object):
 
 
 diff = ParameterDiffer(model)
-lr = 6.5e-5
+lr = 7.5e-5
 num_train_optimization_steps = len(train_dataloader) * num_train_epochs
 
 optim = AdamW(model.parameters(), lr=lr)
@@ -166,7 +168,7 @@ scheduler = WarmupLinearSchedule(optim, warmup_steps=int(0. * num_train_optimiza
 scheduler.step()
 
 diff_vec = torch.rand(t) * 10000000 
-pitch = int(0.90 * t)
+pitch = int(0.9 * t)
 print(pitch, lr, seed)
 for epoch in range(num_train_epochs):
     

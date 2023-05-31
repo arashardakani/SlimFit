@@ -60,7 +60,6 @@ class ILSLinear(nn.Linear):
         else:
             cache = False
         out = ILSLinearFunction.apply(input, self.weight, cache, compute, self.Qflag)
-        #out = nn.functional.linear(input, self.weight)
         if not self.bias is None:
             out += self.bias.view(1, -1).expand_as(out) 
 
@@ -98,6 +97,8 @@ def shaper(input: torch.Tensor, type):
         input = input.type(torch.cuda.ByteTensor)
     elif type == '8-bit':
         input = input.type(torch.cuda.CharTensor)
+    elif type == 'u8-bit':
+        input = input.type(torch.cuda.ByteTensor)
     else:
         input
 
@@ -124,7 +125,6 @@ class ILSLayerNormFunction(torch.autograd.Function):
         ctx.compute = compute
         if cache:
             ctx.save_for_backward(input, weight)
-            #ctx.save_for_backward(shaper(quantize(input, 5, 2), '8-bit'), weight)
         elif compute:
             mean = input.mean(dim = -1, keepdim=True)
             var = ((input - mean) ** 2).mean(dim = -1, keepdim=True)
@@ -154,8 +154,6 @@ class ILSLayerNormFunction(torch.autograd.Function):
 
 
 
-            #grad_input = (1 / N) * weight * (1/std * (N * grad_output.T) - grad_output.T.sum(dim = [int(s) for s in range(2,grad_output.dim())], keepdim=True) - (y.T * torch.square(1/std) * (grad_output.T*y).sum(dim = [int(s) for s in range(2,grad_output.dim())], keepdim=True) ))
-
         elif ctx.compute:
             x, weight, std = ctx.saved_tensors
             y = pad_mink(x, ctx)
@@ -182,7 +180,6 @@ class ILSLayerNorm(nn.LayerNorm):
             cache = True
         else:
             cache = False
-        #out = nn.functional.layer_norm(input, self.normalized_shape, self.weight, self.bias, self.eps) #
         out = ILSLayerNormFunction.apply(input, self.normalized_shape, self.weight, self.bias, self.eps, cache, compute)
 
 
@@ -231,12 +228,8 @@ class ILSGELUFunction(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, input: torch.Tensor):
-        #print(( (input<-0.) * (input>-3.0)  ).sum()/input.reshape(-1).shape[0])  select_mink(1., input, ctx)
-
-        #ctx.save_for_backward( torch.clamp(torch.round(input * 2**1) / 2**1, -4, 3.5) )
         ctx.shape = input.shape
         ctx.save_for_backward( shaper(quantize(input, 2, 1), '4-bit') )
-        #ctx.save_for_backward( input )
         return nn.functional.gelu(input)
 
 
@@ -244,7 +237,7 @@ class ILSGELUFunction(torch.autograd.Function):
     def backward(ctx, grad_output: torch.Tensor):
         
         x = deshaper(ctx.saved_tensors[0],'4-bit').reshape(ctx.shape) / 2**1
-        y = x #pad_mink(x, ctx)
+        y = x 
         cdf = 0.5 * (1.0 + torch.erf(y / np.sqrt(2.0)))
         p = torch.exp(-0.5*y**2)/np.sqrt(2.*np.pi)
         grad_input = cdf + y * p
@@ -254,18 +247,6 @@ class ILSGELUFunction(torch.autograd.Function):
 
 ILSGELU = ILSGELUFunction.apply
 
-'''class ILSGELU(nn.Module):
-    # To be completed
-    def __init__(self):
-        super().__init__()
-
-
-
-    def forward(self, input):
-        
-        out = ILSGELUFunction.apply(input)
-
-        return out'''
 
 
 
@@ -275,17 +256,13 @@ class ILSmatmulFunction(torch.autograd.Function):
     def forward(ctx, input1: torch.Tensor, input2: torch.Tensor):
         ctx.shape1 = input1.shape
         ctx.shape2 = input2.shape
-        #print(input1.max(), input1.min(), input1.std(), input1.var(), input2.max(), input2.min(), input2.std(), input2.var())
         ctx.save_for_backward(shaper(quantize(input1, 3, 4), '8-bit'), shaper(quantize(input2, 3, 4), '8-bit'))
-        #ctx.save_for_backward(input1,input2)
         return torch.matmul(input1, input2)
 
 
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor):
         in1, in2 = deshaper(ctx.saved_tensors[0],'8-bit').reshape(ctx.shape1)/2**4, deshaper(ctx.saved_tensors[1],'8-bit').reshape(ctx.shape2)/2**4
-        #in1, in2 = ctx.saved_tensors[0], ctx.saved_tensors[1]
-        #print(in1.min(),in1.max(), in1.var(),in2.min(),in2.max(), in2.var())
         grad_input2 = torch.matmul(in1.transpose(-1, -2), grad_output)
         grad_input1 = torch.matmul(grad_output, in2.transpose(-1, -2))
         return grad_input1, grad_input2 
@@ -295,6 +272,27 @@ ILSmatmul = ILSmatmulFunction.apply
 
 
 
+class ILSDropoutFunction(torch.autograd.Function):
+
+    @staticmethod
+    def forward(ctx, input, bionomial, p=0.5, train=False):
+        
+        ctx.p = p
+        ctx.train = train
+        if ctx.p > 0 and ctx.train:
+            
+            ctx.noise = torch.ones_like(input, dtype = torch.bool)
+            ctx.noise.bernoulli_(1 - ctx.p)
+            return input * ctx.noise / (1 - ctx.p)
+        else:
+            return input
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        if ctx.p > 0 and ctx.train:
+            return grad_output.mul(ctx.noise).div(1 - ctx.p), None, None, None #
+        else:
+            return grad_output, None, None, None
 
 
 class ILSDropout(nn.Dropout):
@@ -302,7 +300,51 @@ class ILSDropout(nn.Dropout):
         super(ILSDropout, self).__init__(*kargs)
         self.binomial = torch.distributions.binomial.Binomial(probs=1-torch.as_tensor(self.p))
     def forward(self, input):
+        #return ILSDropoutFunction.apply(input, self.binomial, self.p, self.training)
         return nn.functional.dropout(input, self.p, self.training, self.inplace)
+        #return input
+
+
+class ILSSoftmaxFunction(torch.autograd.Function):
+
+    @staticmethod
+    def forward(ctx, input: torch.Tensor):
+        out = nn.Softmax(dim=-1)(input)
+        ctx.save_for_backward(out)
+        return out
+
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        input = ctx.saved_tensors[0]
+        tmp = grad_output * input
+        grad_input = tmp - input * (tmp).sum(-1).unsqueeze(-1)
+        return grad_input 
 
 
 
+ILSSoftmax = ILSSoftmaxFunction.apply
+
+
+class ILSsoftmax_matmulFunction(torch.autograd.Function):
+
+    @staticmethod
+    def forward(ctx, input1: torch.Tensor, input2: torch.Tensor):
+        ctx.shape1 = input1.shape
+        ctx.shape2 = input2.shape
+        input1 = nn.Softmax(dim=-1)(input1)
+        ctx.save_for_backward(shaper(quantize(input1, 0, 8), 'u8-bit'), shaper(quantize(input2, 3, 4), '8-bit'))
+        return torch.matmul(input1, input2)
+
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        in1, in2 = deshaper(ctx.saved_tensors[0],'8-bit').reshape(ctx.shape1)/2**8, deshaper(ctx.saved_tensors[1],'8-bit').reshape(ctx.shape2)/2**4
+        grad_input2 = torch.matmul(in1.transpose(-1, -2), grad_output)
+        input = torch.matmul(grad_output, in2.transpose(-1, -2))
+        tmp = input * in1
+        grad_input1 = tmp - in1 * (tmp).sum(-1).unsqueeze(-1)
+        return grad_input1, grad_input2 
+
+
+ILSsoftmax_matmul = ILSsoftmax_matmulFunction.apply

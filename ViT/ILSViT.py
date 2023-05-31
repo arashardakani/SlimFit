@@ -37,7 +37,7 @@ from transformers.file_utils import (
     replace_return_docstrings,
 )
 from transformers import ViTConfig
-from utils_ILS import ILSLinear, ILSLayerNorm, ILSGELU, ILSmatmul, ILSDropout
+from utils_ILS import ILSLinear, ILSLayerNorm, ILSGELU, ILSmatmul, ILSDropout, ILSsoftmax_matmul, ILSSoftmax
 
 ACT2FN = {
     "relu": F.relu,
@@ -228,17 +228,17 @@ class ViTSelfAttention(nn.Module):
         attention_scores = attention_scores / math.sqrt(self.attention_head_size)
 
         # Normalize the attention scores to probabilities.
-        attention_probs = nn.Softmax(dim=-1)(attention_scores) #(attention_scores, dim=-1)
-
+        attention_probs = (attention_scores) #nn.Softmax(dim=-1)(attention_scores) #ILSSoftmax(attention_scores)
+        
         # This is actually dropping out entire tokens to attend to, which might
         # seem a bit unusual, but is taken from the original Transformer paper.
-        attention_probs = self.dropout(attention_probs)
+        value_layer = self.dropout(value_layer)
 
         # Mask heads if we want to
-        if head_mask is not None:
-            attention_probs = attention_probs * head_mask
+        '''if head_mask is not None:
+            attention_probs = attention_probs * head_mask'''
 
-        context_layer = ILSmatmul(attention_probs, value_layer)
+        context_layer = ILSsoftmax_matmul(attention_probs, value_layer)
 
         context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
         new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)

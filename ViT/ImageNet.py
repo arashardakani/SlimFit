@@ -10,7 +10,7 @@ from transformers import default_data_collator, set_seed
 from ILSViT import ViTForImageClassification
 #from transformers import ViTForImageClassification, set_seed
 from transformers import TrainingArguments, Trainer
-from AdamW import *
+from transformers import AdamW
 
 import torch
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
@@ -21,25 +21,26 @@ import matplotlib.pyplot as plt
 import random
 import re
 import gc
+import torchvision
+import torchvision.transforms as transforms
+from loaddatasets import build_transform
 seed = 43
 
 random.seed(seed)
 np.random.seed(seed)
 torch.manual_seed(seed)
-set_seed(seed)
-torch.cuda.manual_seed_all(seed)
-torch.backends.cudnn.benchmark = False
-torch.backends.cudnn.deterministic = True
 
+
+set_seed(seed)
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-batch_size = 32
+batch_size = 128
 num_train_epochs = 3
 
 
 metric = load_metric("accuracy")
 def compute_metrics(eval_pred, labels):
 
-
+    #predictions, labels = eval_pred
     out = metric.compute(predictions=eval_pred, references=labels)
     return out
 
@@ -61,69 +62,32 @@ class WarmupLinearSchedule(LambdaLR):
 
 
 
-data = load_dataset('cifar100')
+train_path = 'Path_to_train_folder'
+val_path = 'Path_to_val_folder'
 
 
-train_ds = data['train']
+transform_train = build_transform(True)
+transform_valid = build_transform(False)
+train_imagenet_data = torchvision.datasets.ImageFolder(train_path, transform=transform_train)
+val_imagenet_data = torchvision.datasets.ImageFolder(val_path, transform=transform_valid)
 
-test_ds = data['test']
-
-train_ds = train_ds.add_column("label", train_ds["fine_label"])
-test_ds = test_ds.add_column("label", test_ds["fine_label"])
-
-train_ds = train_ds.remove_columns('fine_label')
-train_ds = train_ds.remove_columns('coarse_label')
-
-test_ds = test_ds.remove_columns('fine_label')
-test_ds = test_ds.remove_columns('coarse_label')
-
-feature_extractor = ViTFeatureExtractor.from_pretrained("google/vit-base-patch16-224-in21k")
-
-
-def preprocess_images(examples):
-
-    images = examples['img']
-    images = [np.array(image, dtype=np.uint8) for image in images]
-    images = [np.moveaxis(image, source=-1, destination=0) for image in images]
-    inputs = feature_extractor(images=images)
-    examples['pixel_values'] = inputs['pixel_values']
-
-    return examples
-
-
-features = Features({
-    'label': ClassLabel(num_classes = 100),
-    'img': Image(decode=True, id=None),
-    'pixel_values': Array3D(dtype="float32", shape=(3, 224, 224)),
-})
+ 
 
 
 
-preprocessed_train_ds = train_ds.map(preprocess_images, batched=True, features=features)
-
-preprocessed_test_ds = test_ds.map(preprocess_images, batched=True, features=features)
-
-preprocessed_train_ds = preprocessed_train_ds.remove_columns('img')
-
-preprocessed_test_ds = preprocessed_test_ds.remove_columns('img')
-
-
-data_collator = default_data_collator
 
 num_train_optimization_steps = int(
-        len(preprocessed_train_ds) / batch_size) * num_train_epochs
-train_data = preprocessed_train_ds
-train_dataloader = DataLoader(train_data,
+        len(train_imagenet_data) / batch_size) * num_train_epochs
+
+train_dataloader = DataLoader(train_imagenet_data,
                                 shuffle=True,
-                                collate_fn=data_collator,
                                 pin_memory = True,
                                 num_workers=8,
                                 batch_size=batch_size)
 
 
-eval_dataloader = DataLoader(preprocessed_test_ds,
+eval_dataloader = DataLoader(val_imagenet_data,
                                 shuffle=False,
-                                collate_fn=data_collator,
                                 pin_memory = True,
                                 num_workers=8,
                                 batch_size=batch_size)
@@ -132,15 +96,16 @@ metric = load_metric("accuracy")
 
 
 
-model = ViTForImageClassification.from_pretrained('google/vit-base-patch16-224-in21k', num_labels=100).to(device)
+model = ViTForImageClassification.from_pretrained('google/vit-base-patch16-384', num_labels=1000).to(device)
+
 model.to(device)
 model.train()
-model.classifier.weight.data.normal_(mean=0.0, std=model.config.initializer_range)
 
 t = 0
 for name, p in model.named_parameters():
     if (p.dim() > 1 or re.search('layernorm_before.weight',name) or re.search('layernorm_after.weight',name)): 
         t += 1
+        
 print(t)
 
 
@@ -163,30 +128,32 @@ class ParameterDiffer(object):
                 p_np = p.data.clone()
                 diff = torch.norm((self.network_params[i] - p_np)/self.network_params[i]/self.network_params[i][:].flatten().shape[0], p = 1) 
                 total_diff[i] = diff
-                self.network_params[i] = p_np
+                self.network_params[i] = p_np#.clone()
                 i += 1
         return total_diff
 
 
 diff = ParameterDiffer(model)
-lr = 5.5e-5 #7.5
+lr = 5e-5
 num_train_optimization_steps = len(train_dataloader) * num_train_epochs
 
-optim = AdamW(model.parameters(), lr=lr)
+optim = torch.optim.AdamW(model.parameters(), lr=lr)
 scheduler = WarmupLinearSchedule(optim, warmup_steps=int(0. * num_train_optimization_steps), t_total=num_train_optimization_steps + 1)
 scheduler.step()
 
-diff_vec = torch.rand(t) * 10000000 
-pitch = int(0.75 * t)
+diff_his = []
+diff_vec = torch.rand(t) * 1e20 
+pitch = int(0.95 * t)
 print(pitch, lr, seed)
 for epoch in range(num_train_epochs):
     
     model.train()
     for i, batch in enumerate(tqdm(train_dataloader)):
         cnt = 0
+        model.train()
         sorted_diff = diff_vec.sort(descending=False)[1]
         for name, p in model.named_parameters():
-            if (p.dim() > 1 or re.search('layernorm_before.weight',name) or re.search('layernorm_after.weight',name)):
+            if (p.dim() > 1 or re.search('layernorm_before.weight',name) or re.search('layernorm_after.weight',name)):# and not (re.search('classifier.weight',name) or re.search('embeddings',name)):
                 if cnt in sorted_diff[0:pitch]:
                     p.requires_grad = False
                 else:
@@ -194,19 +161,49 @@ for epoch in range(num_train_epochs):
                 cnt += 1
 
         optim.zero_grad()
-        batch = {k: v.to(device) for k, v in batch.items()} 
-        outputs = model(**batch)
-
-        
+        input = {
+                    "pixel_values": batch[0].to(device),
+                    "labels": batch[1].to(device)
+                }
+        outputs = model(**input)
         loss = outputs.loss
         loss.backward()
         optim.step()
         a = diff.get_difference(model)
         diff_vec[sorted_diff[pitch:]] = a[sorted_diff[pitch:]]
-        
-        
-        scheduler.step()    
+        scheduler.step()   
 
+        if ((i % 16000)==0) and not (i == 0):
+            with torch.no_grad():
+                model.eval()
+                eval_loss = 0
+                nb_eval_steps = 0
+                preds = []
+                labels = []
+                for j, batch1 in enumerate(tqdm(eval_dataloader)):
+                    input = {
+                            "pixel_values": batch1[0].to(device),
+                            "labels": batch1[1].to(device)
+                        }
+                    output_eval = model(**input)
+                    nb_eval_steps += 1
+                    if len(preds) == 0:
+                        preds.append(output_eval.logits.detach().cpu().numpy())
+                        labels.append(input["labels"].detach().cpu().numpy())
+                    else:
+                        preds[0] = np.append(preds[0],
+                                            output_eval.logits.detach().cpu().numpy(),
+                                            axis=0)
+                        labels[0] = np.append(labels[0],
+                                            input["labels"].detach().cpu().numpy(),
+                                            axis=0)
+                preds = preds[0]
+                labels = labels[0]
+                preds = np.argmax(preds, axis=1)
+                #result = {}
+                result = compute_metrics(preds, labels)
+                print(result)
+         
     with torch.no_grad():
         model.eval()
         eval_loss = 0
@@ -214,22 +211,25 @@ for epoch in range(num_train_epochs):
         preds = []
         labels = []
         for j, batch1 in enumerate(tqdm(eval_dataloader)):
-            batch1 = {k: v.to(device) for k, v in batch1.items()} 
-            output_eval = model(**batch1)
+            input = {
+                    "pixel_values": batch1[0].to(device),
+                    "labels": batch1[1].to(device)
+                }
+            output_eval = model(**input)
             nb_eval_steps += 1
             if len(preds) == 0:
                 preds.append(output_eval.logits.detach().cpu().numpy())
-                labels.append(batch1["labels"].detach().cpu().numpy())
+                labels.append(input["labels"].detach().cpu().numpy())
             else:
                 preds[0] = np.append(preds[0],
                                     output_eval.logits.detach().cpu().numpy(),
                                     axis=0)
                 labels[0] = np.append(labels[0],
-                                    batch1["labels"].detach().cpu().numpy(),
+                                    input["labels"].detach().cpu().numpy(),
                                     axis=0)
         preds = preds[0]
         labels = labels[0]
         preds = np.argmax(preds, axis=1)
+        #result = {}
         result = compute_metrics(preds, labels)
         print(result)
-
