@@ -10,11 +10,14 @@ on ImageNet and BERT on SQuAD 2.0 with a batch size of 128 requires 3 and 2 32GB
 
 
 ## This repo contains the preliminary version of our code. To run the code, simply execute the following command by replacing "task.py" with your desired task:
+```
 CUDA_VISIBLE_DEVICES=0 python -W ignore task.py
+```
 
 ## Example:
+```
 CUDA_VISIBLE_DEVICES=0 python -W ignore CIFAR10.py
-
+```
 
 ## MIT License
 
